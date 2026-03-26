@@ -414,23 +414,31 @@ function fmtMsgTime(ts) {
   return new Date(ts).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-// ── LOAD TICKETS ───────────────────────────────────────────────────────────
-function loadTickets() {
-  const q = query(collection(db, 'tickets'));
-  onSnapshot(q, snap => {
-    const prev = tickets.map(t => t.channelId);
-    tickets = snap.docs.map(d => ({ ...d.data(), id: d.id, channelId: d.data().channelId || d.id }));
-
-    // Check for new tickets
-    tickets.forEach(t => {
-      if (!prev.includes(t.channelId) && prev.length > 0) {
-        showToast(t.clientUsername, 'New ticket opened!', t);
-      }
-    });
-
-    renderTickets(tickets);
-    updateUnread();
-  });
+// ── LOAD TICKETS via PROXY ─────────────────────────────────────────────────
+async function loadTickets() {
+  async function fetchTickets() {
+    try {
+      const r = await fetch(`${PROXY_URL}/tickets`, {
+        headers: { 'x-password': PASSWORD }
+      });
+      if (!r.ok) throw new Error('Failed to fetch tickets');
+      const data = await r.json();
+      const prev = tickets.map(t => t.channelId);
+      tickets = data.tickets || [];
+      tickets.forEach(t => {
+        if (!prev.includes(t.channelId) && prev.length > 0) {
+          showToast(t.clientUsername, 'New ticket opened!', t);
+        }
+      });
+      renderTickets(tickets);
+      updateUnread();
+    } catch (err) {
+      document.getElementById('ticket-list').innerHTML =
+        `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">${err.message}</div></div>`;
+    }
+  }
+  await fetchTickets();
+  setInterval(fetchTickets, 10000);
 }
 
 function updateUnread() {
