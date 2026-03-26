@@ -296,13 +296,14 @@ import { getFirestore, collection, doc, addDoc, onSnapshot, orderBy, query, getD
 
 // ── CONFIG — REPLACE THESE ──────────────────────────────────────────────────
 const PASSWORD = 'pd-support';
+const PROXY_URL = 'https://pd-proxy-production.up.railway.app';
 const firebaseConfig = {
-  apiKey: "AIzaSyDi7QZ4m45ZwQ7eOi06x2SafhEetZvp-EI",
-  authDomain: "review-bot-fa434.firebaseapp.com",
-  projectId: "review-bot-fa434",
-  storageBucket: "review-bot-fa434.firebasestorage.app",
-  messagingSenderId: "648346949295",
-  appId: "648346949295"
+  apiKey: "REPLACE_WITH_YOUR_FIREBASE_API_KEY",
+  authDomain: "REPLACE_WITH_YOUR_AUTH_DOMAIN",
+  projectId: "REPLACE_WITH_YOUR_PROJECT_ID",
+  storageBucket: "REPLACE_WITH_YOUR_STORAGE_BUCKET",
+  messagingSenderId: "REPLACE_WITH_YOUR_SENDER_ID",
+  appId: "REPLACE_WITH_YOUR_APP_ID"
 };
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -362,7 +363,7 @@ window.doLogout = function() {
   document.getElementById('pw-input').value = '';
   tickets = [];
   currentTicket = null;
-  if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+  if (unsubMessages) { clearInterval(unsubMessages); unsubMessages = null; }
 };
 
 // ── STATUS ─────────────────────────────────────────────────────────────────
@@ -540,7 +541,7 @@ window.openTicket = function(channelId) {
 
 window.goBack = function() {
   isInChat = false;
-  if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+  if (unsubMessages) { clearInterval(unsubMessages); unsubMessages = null; }
   document.getElementById('chat-view').style.display = 'none';
   document.getElementById('shell').style.display = 'flex';
   currentTicket = null;
@@ -550,23 +551,35 @@ window.goBack = function() {
   document.getElementById('file-preview').innerHTML = '';
 };
 
-// ── LOAD MESSAGES ──────────────────────────────────────────────────────────
-function loadMessages(channelId) {
+// ── LOAD MESSAGES via PROXY ────────────────────────────────────────────────
+async function loadMessages(channelId) {
   const container = document.getElementById('chat-messages');
   container.innerHTML = '<div class="spinner"></div>';
+  if (unsubMessages) { clearInterval(unsubMessages); unsubMessages = null; }
 
-  if (unsubMessages) unsubMessages();
+  async function fetchMsgs() {
+    try {
+      const r = await fetch(`${PROXY_URL}/messages/${channelId}?limit=50`, {
+        headers: { 'x-password': PASSWORD }
+      });
+      if (!r.ok) throw new Error('Failed to fetch messages');
+      const data = await r.json();
+      renderMessages(data.messages.map(m => ({
+        id: m.id,
+        content: m.content,
+        fromSupport: m.fromSupport,
+        author: m.author.username,
+        authorAvatar: m.author.avatar,
+        timestamp: m.timestamp,
+        attachments: m.attachments,
+      })), channelId);
+    } catch (err) {
+      container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><div class="empty-text">${err.message}</div></div>`;
+    }
+  }
 
-  const q = query(
-    collection(db, 'ticketMessages'),
-    where('channelId', '==', channelId),
-    orderBy('timestamp', 'asc')
-  );
-
-  unsubMessages = onSnapshot(q, snap => {
-    const msgs = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-    renderMessages(msgs, channelId);
-  });
+  await fetchMsgs();
+  unsubMessages = setInterval(fetchMsgs, 5000);
 }
 
 function renderMessages(msgs, channelId) {
@@ -628,33 +641,25 @@ function renderMessages(msgs, channelId) {
 }
 
 // ── SEND REPLY ─────────────────────────────────────────────────────────────
+// ── SEND REPLY via PROXY ───────────────────────────────────────────────────
 window.sendReply = async function() {
   if (!currentTicket) return;
   const text = document.getElementById('reply-text').value.trim();
-  if (!text && selectedFiles.length === 0) return;
+  if (!text) return;
 
   const btn = document.getElementById('send-btn');
   btn.disabled = true;
   btn.textContent = 'Sending...';
 
   try {
-    const msgData = {
-      channelId: currentTicket.channelId,
-      content: text || null,
-      fromSupport: true,
-      author: 'Assistant',
-      timestamp: new Date().toISOString(),
-      status: 'pending',
-      attachments: selectedFiles.map(f => ({ name: f.name, url: f.url || '', type: f.type })),
-    };
-
-    await addDoc(collection(db, 'ticketMessages'), msgData);
-
+    const r = await fetch(`${PROXY_URL}/messages/${currentTicket.channelId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-password': PASSWORD },
+      body: JSON.stringify({ content: text })
+    });
+    if (!r.ok) throw new Error('Failed to send');
     document.getElementById('reply-text').value = '';
     document.getElementById('reply-text').style.height = 'auto';
-    selectedFiles = [];
-    document.getElementById('file-preview').innerHTML = '';
-    document.getElementById('file-preview').style.display = 'none';
   } catch (err) {
     alert('Failed to send: ' + err.message);
   }
@@ -701,24 +706,20 @@ window.sendEmbed = async function() {
   const desc = document.getElementById('e-desc').value.trim();
   if (!desc) return alert('Description is required!');
 
-  const embedData = {
-    channelId: currentTicket.channelId,
-    content: null,
-    fromSupport: true,
-    author: 'Assistant',
-    timestamp: new Date().toISOString(),
-    status: 'pending',
-    attachments: [],
-    embed: {
-      title: document.getElementById('e-title').value.trim() || null,
-      description: desc,
-      footer: document.getElementById('e-footer').value.trim() || null,
-      color: embedColor,
-    }
-  };
-
   try {
-    await addDoc(collection(db, 'ticketMessages'), embedData);
+    const r = await fetch(`${PROXY_URL}/messages/${currentTicket.channelId}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-password': PASSWORD },
+      body: JSON.stringify({
+        embed: {
+          title: document.getElementById('e-title').value.trim() || null,
+          description: desc,
+          footer: document.getElementById('e-footer').value.trim() || null,
+          color: embedColor,
+        }
+      })
+    });
+    if (!r.ok) throw new Error('Failed to send');
     closeEmbed();
     document.getElementById('e-title').value = '';
     document.getElementById('e-desc').value = '';
